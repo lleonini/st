@@ -1864,9 +1864,16 @@ kpress(XEvent *ev)
 		if (ksym == bp->keysym && match(bp->mod, e->state)) {
 			if (bp -> func != autocomplete)
 				autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
+			if (bp -> func != hints)
+				hintsdeactivate();
 			bp->func(&(bp->arg));
 			return;
 		}
+	}
+
+	if (hintsactive()) {
+		if (hintsinput(ksym == XK_Escape, ksym == XK_BackSpace, buf, len))
+			return;
 	}
 
 	if (!(

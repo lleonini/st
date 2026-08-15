@@ -79,6 +79,11 @@ typedef union {
 
 void autocomplete (const Arg *);
 
+void hints(const Arg *);
+void hintsdeactivate(void);
+int hintsactive(void);
+int hintsinput(int isescape, int isbackspace, const char *buf, int len);
+
 void die(const char *, ...);
 void redraw(void);
 void draw(void);

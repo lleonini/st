@@ -16,6 +16,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <wctype.h>
 
 #include "autocomplete.h"
 #include "st.h"
@@ -826,6 +827,8 @@ ttyread(void)
 	static char buf[BUFSIZ];
 	static int buflen = 0;
 	int ret, written;
+
+	hintsdeactivate();
 
 	/* append read bytes to unprocessed bytes */
 	ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
@@ -2591,6 +2594,7 @@ tresize(int col, int row)
 	}
 
 	autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
+	hintsdeactivate();
 
 	/*
 	 * slide screen to keep cursor where we expect it -
@@ -2934,4 +2938,202 @@ acmpl_begin:
     selstart(beg % term.col, line + wl + beg / term.col, 0);
     selextend(end % term.col, line + wl + end / term.col, 1, 0);
     xsetsel(getsel());
+}
+
+/*
+ * Hint mode: highlight every word on screen with a two-letter label;
+ * typing that label pastes the word at the cursor.
+ */
+
+#define HINTS_ALPHABET "asdfghjklqwertyuiopzxcvbnm"
+#define HINTS_ALEN (sizeof(HINTS_ALPHABET) - 1)
+#define HINTS_MAXHINTS (HINTS_ALEN * HINTS_ALEN)
+
+typedef struct {
+	int x, y, len;
+	char label[3];
+} Hint;
+
+static Hint hints_list[HINTS_MAXHINTS];
+static int hints_count;
+static int hints_active;
+static char hints_typed[3];
+static int hints_typedlen;
+static Glyph *hints_snapshot;
+static int hints_snaprows, hints_snapcols;
+
+static int
+hintswordchar(Rune u)
+{
+	return u && (iswalnum((wint_t)u) || u == '_');
+}
+
+void
+hintsdeactivate(void)
+{
+	int y, cols;
+
+	if (!hints_active)
+		return;
+
+	if (hints_snapshot) {
+		for (y = 0; y < hints_snaprows && y < term.row; y++) {
+			cols = MIN(hints_snapcols, term.col);
+			memcpy(term.line[y], &hints_snapshot[y * hints_snapcols],
+			       cols * sizeof(Glyph));
+		}
+		free(hints_snapshot);
+		hints_snapshot = NULL;
+	}
+
+	hints_active = 0;
+	hints_typedlen = 0;
+	tfulldirt();
+	draw();
+}
+
+int
+hintsactive(void)
+{
+	return hints_active;
+}
+
+static void
+hintsactivate(void)
+{
+	static const char alphabet[] = HINTS_ALPHABET;
+	int alen = HINTS_ALEN;
+	int maxhints = HINTS_MAXHINTS;
+	int x, y, start, len, labellen, i, j;
+	Hint *h;
+	Glyph *g;
+
+	hints_count = 0;
+	for (y = 0; y < term.row && hints_count < maxhints; y++) {
+		x = 0;
+		while (x < term.col && hints_count < maxhints) {
+			if (!hintswordchar(term.line[y][x].u)) {
+				x++;
+				continue;
+			}
+			start = x;
+			while (x < term.col && hintswordchar(term.line[y][x].u))
+				x++;
+			len = x - start;
+
+			h = &hints_list[hints_count];
+			h->x = start;
+			h->y = y;
+			h->len = len;
+			h->label[0] = alphabet[hints_count / alen];
+			h->label[1] = alphabet[hints_count % alen];
+			h->label[2] = '\0';
+			hints_count++;
+		}
+	}
+
+	if (hints_count == 0)
+		return;
+
+	free(hints_snapshot);
+	hints_snapshot = xmalloc(term.row * term.col * sizeof(Glyph));
+	hints_snaprows = term.row;
+	hints_snapcols = term.col;
+	for (y = 0; y < term.row; y++)
+		memcpy(&hints_snapshot[y * term.col], term.line[y],
+		       term.col * sizeof(Glyph));
+
+	for (i = 0; i < hints_count; i++) {
+		h = &hints_list[i];
+
+		for (j = 0; j < h->len; j++) {
+			g = &term.line[h->y][h->x + j];
+			g->bg = TRUECOLOR(80, 60, 0);
+			g->fg = TRUECOLOR(255, 255, 255);
+			g->mode &= ~ATTR_REVERSE;
+		}
+
+		labellen = MIN(2, term.col - h->x);
+		for (j = 0; j < labellen; j++) {
+			g = &term.line[h->y][h->x + j];
+			g->u = (Rune)h->label[j];
+			g->bg = TRUECOLOR(255, 200, 0);
+			g->fg = TRUECOLOR(0, 0, 0);
+			g->mode |= ATTR_BOLD;
+			g->mode &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_REVERSE);
+		}
+	}
+
+	hints_active = 1;
+	hints_typedlen = 0;
+	tfulldirt();
+	draw();
+}
+
+static void
+hintspaste(Hint *h)
+{
+	char buf[64];
+	size_t buflen = 0;
+	int x;
+	Rune u;
+
+	for (x = 0; x < h->len && buflen + UTF_SIZ < sizeof(buf); x++) {
+		u = hints_snapshot[h->y * hints_snapcols + h->x + x].u;
+		buflen += utf8encode(u, buf + buflen);
+	}
+	hintsdeactivate();
+	ttywrite(buf, buflen, 0);
+}
+
+void
+hints(const Arg *arg)
+{
+	(void)arg;
+
+	if (hints_active) {
+		hintsdeactivate();
+		return;
+	}
+
+	hintsactivate();
+}
+
+int
+hintsinput(int isescape, int isbackspace, const char *buf, int len)
+{
+	int i;
+
+	if (!hints_active)
+		return 0;
+
+	if (isescape) {
+		hintsdeactivate();
+		return 1;
+	}
+
+	if (isbackspace) {
+		if (hints_typedlen > 0)
+			hints_typedlen--;
+		return 1;
+	}
+
+	if (len != 1 || !strchr(HINTS_ALPHABET, buf[0]))
+		return 1;
+
+	hints_typed[hints_typedlen++] = buf[0];
+	hints_typed[hints_typedlen] = '\0';
+
+	if (hints_typedlen < 2)
+		return 1;
+
+	for (i = 0; i < hints_count; i++) {
+		if (!strcmp(hints_list[i].label, hints_typed)) {
+			hintspaste(&hints_list[i]);
+			return 1;
+		}
+	}
+
+	hintsdeactivate();
+	return 1;
 }
