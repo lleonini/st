@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <wchar.h>
 
+#include "autocomplete.h"
 #include "st.h"
 #include "win.h"
 
@@ -2589,6 +2590,8 @@ tresize(int col, int row)
 		return;
 	}
 
+	autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
+
 	/*
 	 * slide screen to keep cursor where we expect it -
 	 * tscrollup would work here, but we can optimize to
@@ -2707,4 +2710,228 @@ redraw(void)
 {
 	tfulldirt();
 	draw();
+}
+
+void autocomplete (const Arg *arg) {
+    static _Bool active = 0;
+    int acmpl_cmdindex = arg->i;
+    static int acmpl_cmdindex_prev;
+
+    if (active == 0)
+        acmpl_cmdindex_prev = acmpl_cmdindex;
+
+    static const char * const acmpl_cmd[] = {
+        [ACMPL_DEACTIVATE]   = "__DEACTIVATE__",
+        [ACMPL_WORD]         = "word-complete",
+        [ACMPL_WWORD]        = "WORD-complete",
+        [ACMPL_FUZZY_WORD]   = "fuzzy-word-complete",
+        [ACMPL_FUZZY_WWORD]  = "fuzzy-WORD-complete",
+        [ACMPL_FUZZY]        = "fuzzy-complete",
+        [ACMPL_SUFFIX]       = "suffix-complete",
+        [ACMPL_SURROUND]     = "surround-complete",
+        [ACMPL_UNDO]         = "__UNDO__",
+    };
+
+    static FILE *acmpl_exec = NULL;
+    static int acmpl_status;
+    static char *stbuffile;
+    static char *target = NULL;
+    static size_t targetlen;
+    static char *completion = NULL;
+    static size_t complen_prev = 0;
+    static int cx, cy;
+
+    if (acmpl_cmdindex == ACMPL_DEACTIVATE) {
+        if (active) {
+            active = 0;
+            pclose(acmpl_exec);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+
+            if (complen_prev) {
+                selclear();
+                complen_prev = 0;
+            }
+        }
+        return;
+    }
+
+    if (acmpl_cmdindex == ACMPL_UNDO) {
+        if (active) {
+            active = 0;
+            pclose(acmpl_exec);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+
+            if (complen_prev) {
+                selclear();
+                for (size_t i = 0; i < complen_prev; i++)
+                    ttywrite((char[]) {'\b'}, 1, 1);
+                complen_prev = 0;
+                ttywrite(target, targetlen, 0);
+            }
+        }
+        return;
+    }
+
+    if (acmpl_cmdindex != acmpl_cmdindex_prev) {
+        if (active) {
+            acmpl_cmdindex_prev = acmpl_cmdindex;
+            goto acmpl_begin;
+        }
+    }
+
+    if (active == 0) {
+        acmpl_cmdindex_prev = acmpl_cmdindex;
+        cx = term.c.x;
+        cy = term.c.y;
+
+        char filename[] = "/tmp/st-autocomplete-XXXXXX";
+        int fd = mkstemp(filename);
+
+        if (fd == -1) {
+            perror("mkstemp");
+            return;
+        }
+
+        stbuffile = strdup(filename);
+
+        FILE *stbuf = fdopen(fd, "w");
+        if (!stbuf) {
+            perror("fdopen");
+            close(fd);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+
+        char *stbufline = malloc(term.col + 2);
+        if (!stbufline) {
+            perror("malloc");
+            fclose(stbuf);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+
+        int cxp = 0;
+        for (size_t y = 0; y < term.row; y++) {
+            if (y == term.c.y) cx += cxp * term.col;
+
+            size_t x = 0;
+            for (; x < term.col; x++)
+                utf8encode(term.line[y][x].u, stbufline + x);
+            if (term.line[y][x - 1].mode & ATTR_WRAP) {
+                x--;
+                if (y <= term.c.y) cy--;
+                cxp++;
+            } else {
+                stbufline[x] = '\n';
+                cxp = 0;
+            }
+            stbufline[x + 1] = 0;
+            fputs(stbufline, stbuf);
+        }
+
+        free(stbufline);
+        fclose(stbuf);
+
+acmpl_begin:
+        target = malloc(term.col + 1);
+        completion = malloc(term.col + 1);
+        if (!target || !completion) {
+            perror("malloc");
+            free(target);
+            free(completion);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+
+        char acmpl[1500];
+        snprintf(acmpl, sizeof(acmpl),
+                 "cat %s | st-autocomplete %s %d %d",
+                 stbuffile, acmpl_cmd[acmpl_cmdindex], cy, cx);
+
+        acmpl_exec = popen(acmpl, "r");
+        if (!acmpl_exec) {
+            perror("popen");
+            free(target);
+            free(completion);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+
+        if (fscanf(acmpl_exec, "%s\n", target) != 1) {
+            perror("fscanf");
+            pclose(acmpl_exec);
+            free(target);
+            free(completion);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+        targetlen = strlen(target);
+    }
+
+    unsigned line, beg, end;
+
+    acmpl_status = fscanf(acmpl_exec, "%[^\n]\n%u\n%u\n%u\n", completion, &line, &beg, &end);
+    if (acmpl_status == EOF) {
+        if (active == 0) {
+            pclose(acmpl_exec);
+            free(target);
+            free(completion);
+            unlink(stbuffile);
+            free(stbuffile);
+            stbuffile = NULL;
+            return;
+        }
+        active = 0;
+        pclose(acmpl_exec);
+        ttywrite(target, targetlen, 0);
+        goto acmpl_begin;
+    }
+
+    active = 1;
+
+    if (complen_prev == 0) {
+        for (size_t i = 0; i < targetlen; i++)
+            ttywrite((char[]) {'\b'}, 1, 1);
+    } else {
+        selclear();
+        for (size_t i = 0; i < complen_prev; i++)
+            ttywrite((char[]) {'\b'}, 1, 1);
+        complen_prev = 0;
+    }
+
+    complen_prev = strlen(completion);
+    ttywrite(completion, complen_prev, 0);
+
+    if (line == cy && beg > cx) {
+        beg += complen_prev - targetlen;
+        end += complen_prev - targetlen;
+    }
+
+    end--;
+
+    int wl = 0;
+    int tl = line;
+    for (int l = 0; l < tl; l++)
+        if (term.line[l][term.col - 1].mode & ATTR_WRAP) {
+            wl++;
+            tl++;
+        }
+
+    selstart(beg % term.col, line + wl + beg / term.col, 0);
+    selextend(end % term.col, line + wl + end / term.col, 1, 0);
+    xsetsel(getsel());
 }
