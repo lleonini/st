@@ -178,11 +178,9 @@ static uint forcemousemod = ShiftMask;
  */
 static MouseShortcut mshortcuts[] = {
 	/* mask                 button   function        argument       release */
+	{ XK_ANY_MOD,           Button4, kscrollup,      {.f = 3} },
+	{ XK_ANY_MOD,           Button5, kscrolldown,    {.f = 3} },
 	{ XK_ANY_MOD,           Button2, selpaste,       {.i = 0},      1 },
-	{ ShiftMask,            Button4, ttysend,        {.s = "\033[5;2~"} },
-	{ XK_ANY_MOD,           Button4, ttysend,        {.s = "\031"} },
-	{ ShiftMask,            Button5, ttysend,        {.s = "\033[6;2~"} },
-	{ XK_ANY_MOD,           Button5, ttysend,        {.s = "\005"} },
 };
 
 /* Internal keyboard shortcuts. */
@@ -206,12 +204,16 @@ static Shortcut shortcuts[] = {
 	{ ControlMask,          XK_minus,       zoom,           {.f = -2} },
 	{ ControlMask,          XK_KP_Subtract, zoom,           {.f = -2} },
 	{ ControlMask,          XK_0,           zoomreset,      {.f =  0} },
+	{ ShiftMask,            XK_Return,      ttysend,        {.s = "\033[13;2u"} },
+	{ ShiftMask,            XK_space,       ttysend,        {.s = "\033[32;2u"} },
 	{ TERMMOD,              XK_C,           clipcopy,       {.i =  0} },
 	{ TERMMOD,              XK_V,           clippaste,      {.i =  0} },
 	{ TERMMOD,              XK_Y,           selpaste,       {.i =  0} },
 	{ ShiftMask,            XK_Insert,      selpaste,       {.i =  0} },
 	{ TERMMOD,              XK_Num_Lock,    numlock,        {.i =  0} },
 	{ TERMMOD,              XK_W,           hints,          {.i =  0} },
+	{ ShiftMask,            XK_Page_Up,     kscrollup,      {.f = -0.1} },
+	{ ShiftMask,            XK_Page_Down,   kscrolldown,    {.f = -0.1} },
 	{ ACMPL_MOD,            XK_slash,       autocomplete,   { .i = ACMPL_WORD        } },
 	{ ACMPL_MOD,            XK_period,      autocomplete,   { .i = ACMPL_FUZZY_WORD  } },
 	{ ACMPL_MOD,            XK_comma,       autocomplete,   { .i = ACMPL_FUZZY       } },
