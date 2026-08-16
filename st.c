@@ -47,6 +47,11 @@
 #define TSCREEN term.screen[IS_SET(MODE_ALTSCREEN)]
 #define TLINEOFFSET(y) (((y) + TSCREEN.cur - TSCREEN.off + TSCREEN.size) % TSCREEN.size)
 #define TLINE(y) (TSCREEN.buffer[TLINEOFFSET(y)])
+/* Like TLINE(), but always addresses the live screen regardless of the
+ * current scrollback view offset. Use this for anything that must refer
+ * to the actual cursor's line (not what's currently displayed). */
+#define TLIVELINEOFFSET(y) (((y) + TSCREEN.cur + TSCREEN.size) % TSCREEN.size)
+#define TLIVELINE(y) (TSCREEN.buffer[TLIVELINEOFFSET(y)])
 
 enum term_mode {
 	MODE_WRAP        = 1 << 0,
@@ -1100,10 +1105,19 @@ kscrollup(const Arg *a)
 {
 	float n = a->f;
 
-	if (IS_SET(MODE_ALTSCREEN))
-		return;
-
 	if (n < 0) n = MAX((-n) * term.row, 1);
+
+	if (IS_SET(MODE_ALTSCREEN)) {
+		/* No real scrollback on the alt screen. Fall back to the
+		 * traditional ^Y-per-line so fullscreen apps without their
+		 * own mouse reporting (less, man, vim/tmux without mouse
+		 * mode) still see wheel/scroll input instead of nothing. */
+		int i;
+		for (i = 0; i < (int)n; i++)
+			ttywrite("\031", 1, 0);
+		return;
+	}
+
 	if (n > TSCREEN.size - term.row - TSCREEN.off) n = TSCREEN.size - term.row - TSCREEN.off;
 	while (!TLINE((int)-n)) --n;
 	TSCREEN.off += n;
@@ -1117,10 +1131,15 @@ kscrolldown(const Arg *a)
 
 	float n = a->f;
 
-	if (IS_SET(MODE_ALTSCREEN))
-		return;
-
 	if (n < 0) n = MAX((-n) * term.row, 1);
+
+	if (IS_SET(MODE_ALTSCREEN)) {
+		int i;
+		for (i = 0; i < (int)n; i++)
+			ttywrite("\005", 1, 0);
+		return;
+	}
+
 	if (n > TSCREEN.off) n = TSCREEN.off;
 	TSCREEN.off -= n;
 	selscroll(0, -n);
@@ -2745,9 +2764,16 @@ tresize(int col, int row)
 
 	hintsdeactivate();
 
-	/* Shift buffer to keep the cursor where we expect it */
-	if (row <= term.c.y) {
-		term.screen[0].cur = (term.screen[0].cur - row + term.c.y + 1) % term.screen[0].size;
+	/* Shift buffer to keep the cursor where we expect it. term.c is
+	 * whichever screen is currently active; while on the alt screen
+	 * (e.g. resizing inside vim/less/tmux), the main screen's real
+	 * cursor row is only preserved in its saved cursor (set on
+	 * alt-screen entry), not in term.c. */
+	{
+		int mainrow = IS_SET(MODE_ALTSCREEN) ? term.screen[0].sc.y : term.c.y;
+		if (row <= mainrow) {
+			term.screen[0].cur = (term.screen[0].cur - row + mainrow + 1) % term.screen[0].size;
+		}
 	}
 
 	/* Resize and clear line buffers as needed */
@@ -2840,12 +2866,13 @@ draw(void)
 	if (!xstartdraw())
 		return;
 
-	/* adjust cursor position */
+	/* adjust cursor position - always against the live line, not
+	 * whatever's currently scrolled into view */
 	LIMIT(term.ocx, 0, term.col-1);
 	LIMIT(term.ocy, 0, term.row-1);
-	if (TLINE(term.ocy)[term.ocx].mode & ATTR_WDUMMY)
+	if (TLIVELINE(term.ocy)[term.ocx].mode & ATTR_WDUMMY)
 		term.ocx--;
-	if (TLINE(term.c.y)[cx].mode & ATTR_WDUMMY)
+	if (TLIVELINE(term.c.y)[cx].mode & ATTR_WDUMMY)
 		cx--;
 
 	drawregion(0, 0, term.col, term.row);

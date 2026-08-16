@@ -21,6 +21,8 @@ LIBS = -L$(X11LIB) -lm -lrt -lX11 -lutil -lXft \
        `$(PKG_CONFIG) --libs freetype2`
 
 # flags
+CFLAGS = -O3 -march=native -pipe -fomit-frame-pointer
+LDFLAGS = -s
 STCPPFLAGS = -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600
 STCFLAGS = $(INCS) $(STCPPFLAGS) $(CPPFLAGS) $(CFLAGS)
 STLDFLAGS = $(LIBS) $(LDFLAGS)

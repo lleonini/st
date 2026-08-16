@@ -5,7 +5,7 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "Rec Mono Semicasual:pixelsize=20:antialias=true:autohint=true";
+static char *font = "Rec Mono Semicasual:size=15:antialias=true:autohint=false:hinting=true";
 static int borderpx = 2;
 
 /*
