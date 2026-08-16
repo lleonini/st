@@ -721,6 +721,24 @@ bmotion(XEvent *e)
 		return;
 	}
 
+	/*
+	 * Dragging a selection past the top/bottom edge scrolls the
+	 * scrollback (there's none to scroll on the alt screen, and we
+	 * don't want to feed the app keystrokes mid-selection there).
+	 * kscrollup/kscrolldown clamp/no-op on their own at the ends of
+	 * the scrollback, and shift the in-progress selection to stay
+	 * anchored to the same text, so the clamped coordinates mousesel
+	 * computes below land on the newly revealed edge line and grow
+	 * the selection into it.
+	 */
+	if (selactive() && !inaltscreen()) {
+		int rawy = e->xbutton.y - borderpx;
+		if (rawy < 0)
+			kscrollup(&(Arg){ .f = 1 });
+		else if (rawy >= win.th)
+			kscrolldown(&(Arg){ .f = 1 });
+	}
+
 	mousesel(e, 0);
 }
 

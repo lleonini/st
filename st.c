@@ -227,6 +227,7 @@ static Line ensureline(Line);
 
 static void selnormalize(void);
 static void selscroll(int, int);
+static void selscrollview(int);
 static void selsnap(int *, int *, int);
 
 static size_t utf8decode(const char *, Rune *, size_t);
@@ -426,10 +427,25 @@ selinit(void)
 }
 
 int
+selactive(void)
+{
+	return sel.mode != SEL_IDLE;
+}
+
+int
+inaltscreen(void)
+{
+	return IS_SET(MODE_ALTSCREEN);
+}
+
+int
 tlinelen(int y)
 {
 	int i = term.col;
 	Line line = TLINE(y);
+
+	if (!line)
+		return 0;
 
 	if (line[i - 1].mode & ATTR_WRAP)
 		return i;
@@ -543,6 +559,8 @@ selsnap(int *x, int *y, int direction)
 		 * Snap around if the word wraps around at the end or
 		 * beginning of a line.
 		 */
+		if (!TLINE(*y))
+			break;
 		prevgp = &TLINE(*y)[*x];
 		prevdelim = ISDELIM(prevgp->u);
 		for (;;) {
@@ -1121,7 +1139,7 @@ kscrollup(const Arg *a)
 	if (n > TSCREEN.size - term.row - TSCREEN.off) n = TSCREEN.size - term.row - TSCREEN.off;
 	while (!TLINE((int)-n)) --n;
 	TSCREEN.off += n;
-	selscroll(0, n);
+	selscrollview(n);
 	tfulldirt();
 }
 
@@ -1142,7 +1160,7 @@ kscrolldown(const Arg *a)
 
 	if (n > TSCREEN.off) n = TSCREEN.off;
 	TSCREEN.off -= n;
-	selscroll(0, -n);
+	selscrollview(-n);
 	tfulldirt();
 }
 
@@ -1241,6 +1259,27 @@ selscroll(int orig, int n)
 			selnormalize();
 		}
 	}
+}
+
+/*
+ * Like selscroll(), but for scrolling the *view* (kscrollup/kscrolldown)
+ * rather than actually shifting/destroying content (tscrollup/
+ * tscrolldown). Nothing is lost when the view scrolls, so unlike
+ * selscroll() this never clears the selection - the anchor is simply
+ * allowed to move outside the currently visible rows, tracking the same
+ * absolute text so the selection stays correct if the view scrolls back.
+ * (tlinelen()/selsnap() are NULL-guarded for the case where that text
+ * has since fallen out of the scrollback buffer.)
+ */
+static void
+selscrollview(int n)
+{
+	if (sel.ob.x == -1 || sel.alt != IS_SET(MODE_ALTSCREEN))
+		return;
+
+	sel.ob.y += n;
+	sel.oe.y += n;
+	selnormalize();
 }
 
 void
