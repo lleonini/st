@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 #include <wchar.h>
 #include <wctype.h>
@@ -253,6 +254,40 @@ static const uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
 static const uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static const Rune utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
 static const Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
+
+/*
+ * Synchronized-Update (application-sync) support - see
+ * https://gitlab.com/gnachman/iterm2/-/wikis/synchronized-updates-spec
+ * Draw-suspension begins on BSU (Begin-Synchronized-Update) and ends on
+ * ESU (End-Synchronized-Update), both DCS sequences handled in
+ * strhandle(). If ESU doesn't arrive, tinsync() gives up after a
+ * timeout so a misbehaving/crashed app can't wedge drawing forever.
+ */
+static int su = 0;
+static struct timespec sutv;
+
+static void
+tsync_begin(void)
+{
+	clock_gettime(CLOCK_MONOTONIC, &sutv);
+	su = 1;
+}
+
+static void
+tsync_end(void)
+{
+	su = 0;
+}
+
+int
+tinsync(uint timeout)
+{
+	struct timespec now;
+	if (su && !clock_gettime(CLOCK_MONOTONIC, &now)
+	       && TIMEDIFF(now, sutv) >= timeout)
+		su = 0;
+	return su;
+}
 
 ssize_t
 xwrite(int fd, const char *s, size_t len)
@@ -859,6 +894,20 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 	return cmdfd;
 }
 
+/*
+ * Set when twrite() bails out early because a Synchronized-Update is
+ * suspending drawing, leaving unprocessed bytes buffered in ttyread().
+ * Lets the main loop keep re-driving ttyread() (without an actual read())
+ * to work through the backlog once the suspension ends, instead of
+ * waiting for more tty activity to wake it up.
+ */
+static int twrite_aborted = 0;
+int
+ttyread_pending(void)
+{
+	return twrite_aborted;
+}
+
 size_t
 ttyread(void)
 {
@@ -869,7 +918,7 @@ ttyread(void)
 	hintsdeactivate();
 
 	/* append read bytes to unprocessed bytes */
-	ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
+	ret = twrite_aborted ? 1 : read(cmdfd, buf+buflen, LEN(buf)-buflen);
 
 	switch (ret) {
 	case 0:
@@ -877,7 +926,7 @@ ttyread(void)
 	case -1:
 		die("couldn't read from shell: %s\n", strerror(errno));
 	default:
-		buflen += ret;
+		buflen += twrite_aborted ? 0 : ret;
 		written = twrite(buf, buflen, 0);
 		buflen -= written;
 		/* keep any incomplete UTF-8 byte sequence for the next call */
@@ -1046,6 +1095,7 @@ tsetdirtattr(int attr)
 void
 tfulldirt(void)
 {
+	tsync_end();
 	tsetdirt(0, term.row-1);
 }
 
@@ -2158,6 +2208,12 @@ strhandle(void)
 		xsettitle(strescseq.args[0]);
 		return;
 	case 'P': /* DCS -- Device Control String */
+		/* https://gitlab.com/gnachman/iterm2/-/wikis/synchronized-updates-spec */
+		if (strstr(strescseq.buf, "=1s") == strescseq.buf)
+			tsync_begin();  /* BSU */
+		else if (strstr(strescseq.buf, "=2s") == strescseq.buf)
+			tsync_end();  /* ESU */
+		return;
 	case '_': /* APC -- Application Program Command */
 	case '^': /* PM -- Privacy Message */
 		return;
@@ -2716,6 +2772,9 @@ twrite(const char *buf, int buflen, int show_ctrl)
 	LineBuffer *lb = &term.screen[scridx];
 	int oldoff = lb->off;
 	int oldcur = lb->cur;
+	int su0 = su;
+
+	twrite_aborted = 0;
 
 	/*
 	 * Terminal emulation (tputc and friends) always addresses the
@@ -2741,6 +2800,10 @@ twrite(const char *buf, int buflen, int show_ctrl)
 		} else {
 			u = buf[n] & 0xFF;
 			charsize = 1;
+		}
+		if (su0 && !su) {
+			twrite_aborted = 1;
+			break;  /* ESU - allow rendering before a new BSU */
 		}
 		if (show_ctrl && ISCONTROL(u)) {
 			if (u & 0x80) {

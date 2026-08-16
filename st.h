@@ -87,6 +87,9 @@ void kscrollup(const Arg *);
 void kscrolldown(const Arg *);
 void scrollbottom(void);
 
+int tinsync(uint);
+int ttyread_pending(void);
+
 void die(const char *, ...);
 void redraw(void);
 void draw(void);
