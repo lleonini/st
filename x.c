@@ -1883,8 +1883,6 @@ kpress(XEvent *ev)
 	/* 1. shortcuts */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
 		if (ksym == bp->keysym && match(bp->mod, e->state)) {
-			if (bp -> func != autocomplete)
-				autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
 			if (bp -> func != hints)
 				hintsdeactivate();
 			/* kscrollup/kscrolldown manage the scroll offset
@@ -1905,13 +1903,6 @@ kpress(XEvent *ev)
 	/* any other keypress (custom key or composed/typed input below)
 	 * is user activity: snap the view back to the bottom. */
 	scrollbottom();
-
-	if (!(
-		len == 0 &&
-		e -> state & ~ignoremod		// ACMPL_ISSUE: I'm not sure that this is the right way
-				| ACMPL_MOD == ACMPL_MOD
-	))
-		autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
 
 	/* 2. custom keys from config.h */
 	if ((customkey = kmap(ksym, e->state))) {

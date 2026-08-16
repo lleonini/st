@@ -78,8 +78,6 @@ typedef union {
 	const char *s;
 } Arg;
 
-void autocomplete (const Arg *);
-
 void hints(const Arg *);
 void hintsdeactivate(void);
 int hintsactive(void);
