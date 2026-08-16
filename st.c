@@ -3065,7 +3065,7 @@ acmpl_begin:
  * typing that label pastes the word at the cursor.
  */
 
-#define HINTS_ALPHABET "asdfghjklqwertyuiopzxcvbnm"
+#define HINTS_ALPHABET "ntesoriahgmvlfkpudywjbqcxz"
 #define HINTS_ALEN (sizeof(HINTS_ALPHABET) - 1)
 #define HINTS_MAXHINTS (HINTS_ALEN * HINTS_ALEN)
 
@@ -3085,7 +3085,7 @@ static int hints_snaprows, hints_snapcols;
 static int
 hintswordchar(Rune u)
 {
-	return u && (iswalnum((wint_t)u) || u == '_');
+	return u && (iswalnum((wint_t)u) || u == '_' || u == '-' || u == '.');
 }
 
 void
@@ -3119,14 +3119,71 @@ hintsactive(void)
 }
 
 static void
+hintsrefresh(void)
+{
+	int i, j, labellen;
+	Hint *h;
+	Glyph *g, *orig;
+	int match;
+
+	for (i = 0; i < hints_count; i++) {
+		h = &hints_list[i];
+		match = (hints_typedlen == 0) || (h->label[0] == hints_typed[0]);
+
+		if (!match) {
+			for (j = 0; j < h->len; j++) {
+				orig = &hints_snapshot[h->y * hints_snapcols + h->x + j];
+				g = &TLINE(h->y)[h->x + j];
+				*g = *orig;
+			}
+			continue;
+		}
+
+		for (j = 0; j < h->len; j++) {
+			orig = &hints_snapshot[h->y * hints_snapcols + h->x + j];
+			g = &TLINE(h->y)[h->x + j];
+			g->u = orig->u;
+			g->bg = TRUECOLOR(0, 60, 0);
+			g->fg = TRUECOLOR(255, 255, 255);
+			g->mode &= ~ATTR_REVERSE;
+		}
+
+		labellen = MIN(2, term.col - h->x);
+		if (hints_typedlen == 0) {
+			for (j = 0; j < labellen; j++) {
+				g = &TLINE(h->y)[h->x + j];
+				g->u = (Rune)h->label[j];
+				g->bg = TRUECOLOR(50, 255, 50);
+				g->fg = TRUECOLOR(0, 0, 0);
+				g->mode |= ATTR_BOLD;
+				g->mode &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_REVERSE);
+			}
+		} else if (labellen >= 1) {
+			/* first letter already typed: pull the remaining
+			 * label letter back to the word's first column, and
+			 * let the second column fall back to the plain
+			 * (word-highlighted) text set above. */
+			g = &TLINE(h->y)[h->x];
+			g->u = (Rune)h->label[1];
+			g->bg = TRUECOLOR(50, 255, 50);
+			g->fg = TRUECOLOR(0, 0, 0);
+			g->mode |= ATTR_BOLD;
+			g->mode &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_REVERSE);
+		}
+	}
+
+	tfulldirt();
+	draw();
+}
+
+static void
 hintsactivate(void)
 {
 	static const char alphabet[] = HINTS_ALPHABET;
 	int alen = HINTS_ALEN;
 	int maxhints = HINTS_MAXHINTS;
-	int x, y, start, len, labellen, i, j;
+	int x, y, start, len;
 	Hint *h;
-	Glyph *g;
 
 	TSCREEN.off = 0;
 	hints_count = 0;
@@ -3141,15 +3198,16 @@ hintsactivate(void)
 			while (x < term.col && hintswordchar(TLINE(y)[x].u))
 				x++;
 			len = x - start;
-
-			h = &hints_list[hints_count];
-			h->x = start;
-			h->y = y;
-			h->len = len;
-			h->label[0] = alphabet[hints_count / alen];
-			h->label[1] = alphabet[hints_count % alen];
-			h->label[2] = '\0';
-			hints_count++;
+			if (len >= 4) {
+				h = &hints_list[hints_count];
+				h->x = start;
+				h->y = y;
+				h->len = len;
+				h->label[0] = alphabet[hints_count / alen];
+				h->label[1] = alphabet[hints_count % alen];
+				h->label[2] = '\0';
+				hints_count++;
+			}
 		}
 	}
 
@@ -3164,31 +3222,9 @@ hintsactivate(void)
 		memcpy(&hints_snapshot[y * term.col], TLINE(y),
 		       term.col * sizeof(Glyph));
 
-	for (i = 0; i < hints_count; i++) {
-		h = &hints_list[i];
-
-		for (j = 0; j < h->len; j++) {
-			g = &TLINE(h->y)[h->x + j];
-			g->bg = TRUECOLOR(80, 60, 0);
-			g->fg = TRUECOLOR(255, 255, 255);
-			g->mode &= ~ATTR_REVERSE;
-		}
-
-		labellen = MIN(2, term.col - h->x);
-		for (j = 0; j < labellen; j++) {
-			g = &TLINE(h->y)[h->x + j];
-			g->u = (Rune)h->label[j];
-			g->bg = TRUECOLOR(255, 200, 0);
-			g->fg = TRUECOLOR(0, 0, 0);
-			g->mode |= ATTR_BOLD;
-			g->mode &= ~(ATTR_WIDE | ATTR_WDUMMY | ATTR_REVERSE);
-		}
-	}
-
 	hints_active = 1;
 	hints_typedlen = 0;
-	tfulldirt();
-	draw();
+	hintsrefresh();
 }
 
 static void
@@ -3236,6 +3272,7 @@ hintsinput(int isescape, int isbackspace, const char *buf, int len)
 	if (isbackspace) {
 		if (hints_typedlen > 0)
 			hints_typedlen--;
+		hintsrefresh();
 		return 1;
 	}
 
@@ -3245,8 +3282,10 @@ hintsinput(int isescape, int isbackspace, const char *buf, int len)
 	hints_typed[hints_typedlen++] = buf[0];
 	hints_typed[hints_typedlen] = '\0';
 
-	if (hints_typedlen < 2)
+	if (hints_typedlen < 2) {
+		hintsrefresh();
 		return 1;
+	}
 
 	for (i = 0; i < hints_count; i++) {
 		if (!strcmp(hints_list[i].label, hints_typed)) {
