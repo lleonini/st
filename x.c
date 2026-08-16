@@ -1079,6 +1079,18 @@ ximopen(Display *dpy)
 	XICCallback icdestroy = { .client_data = NULL, .callback = xicdestroy };
 
 	xw.ime.xim = XOpenIM(xw.dpy, NULL, NULL, NULL);
+	if (xw.ime.xim == NULL) {
+		/*
+		 * The IM requested via XMODIFIERS (e.g. @im=ibus/fcitx) may
+		 * not actually be running (no XIM server registered on the
+		 * X server), in which case XOpenIM fails outright. Fall
+		 * back to Xlib's built-in "local" IM, which needs no
+		 * external server and still honors the user's Compose file
+		 * (~/.XCompose), so Compose-key input keeps working.
+		 */
+		XSetLocaleModifiers("@im=local");
+		xw.ime.xim = XOpenIM(xw.dpy, NULL, NULL, NULL);
+	}
 	if (xw.ime.xim == NULL)
 		return 0;
 
@@ -1857,7 +1869,16 @@ kpress(XEvent *ev)
 		if (status == XBufferOverflow)
 			return;
 	} else {
-		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
+		/*
+		 * No XIM connection available (e.g. XMODIFIERS points at an
+		 * IM server that isn't running). Fall back to Xlib's
+		 * classic client-side Compose engine, which only needs the
+		 * locale's Compose file and works without any XIM server -
+		 * pass a persistent XComposeStatus so Compose key sequences
+		 * still work.
+		 */
+		static XComposeStatus compose;
+		len = XLookupString(e, buf, sizeof buf, &ksym, &compose);
 	}
 	/* 1. shortcuts */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
