@@ -1887,6 +1887,11 @@ kpress(XEvent *ev)
 				autocomplete ((const Arg []) { ACMPL_DEACTIVATE });
 			if (bp -> func != hints)
 				hintsdeactivate();
+			/* kscrollup/kscrolldown manage the scroll offset
+			 * themselves; any other shortcut is user activity
+			 * that should snap the view back to the bottom. */
+			if (bp -> func != kscrollup && bp -> func != kscrolldown)
+				scrollbottom();
 			bp->func(&(bp->arg));
 			return;
 		}
@@ -1896,6 +1901,10 @@ kpress(XEvent *ev)
 		if (hintsinput(ksym == XK_Escape, ksym == XK_BackSpace, buf, len))
 			return;
 	}
+
+	/* any other keypress (custom key or composed/typed input below)
+	 * is user activity: snap the view back to the bottom. */
+	scrollbottom();
 
 	if (!(
 		len == 0 &&

@@ -87,6 +87,7 @@ int hintsinput(int isescape, int isbackspace, const char *buf, int len);
 
 void kscrollup(const Arg *);
 void kscrolldown(const Arg *);
+void scrollbottom(void);
 
 void die(const char *, ...);
 void redraw(void);

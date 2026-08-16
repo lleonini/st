@@ -1129,6 +1129,15 @@ kscrolldown(const Arg *a)
 }
 
 void
+scrollbottom(void)
+{
+	if (TSCREEN.off) {
+		TSCREEN.off = 0;
+		tfulldirt();
+	}
+}
+
+void
 tscrolldown(int orig, int n)
 {
 	int i;
@@ -2646,9 +2655,23 @@ twrite(const char *buf, int buflen, int show_ctrl)
 	int charsize;
 	Rune u;
 	int n;
+	int scridx = IS_SET(MODE_ALTSCREEN) ? 1 : 0;
+	LineBuffer *lb = &term.screen[scridx];
+	int oldoff = lb->off;
+	int oldcur = lb->cur;
 
-	if (TSCREEN.off) {
-		TSCREEN.off = 0;
+	/*
+	 * Terminal emulation (tputc and friends) always addresses the
+	 * ring buffer as if we were at the live bottom (off == 0) -
+	 * that's the only way TLINE(term.c.y) reliably lands on the
+	 * cursor's actual line. So process with off temporarily reset,
+	 * then afterwards, if the user was scrolled back, re-derive an
+	 * offset that keeps the same lines pinned in view instead of
+	 * snapping to the bottom - only explicit user scroll input
+	 * should do that.
+	 */
+	if (oldoff) {
+		lb->off = 0;
 		tfulldirt();
 	}
 
@@ -2674,6 +2697,16 @@ twrite(const char *buf, int buflen, int show_ctrl)
 		}
 		tputc(u);
 	}
+
+	if (oldoff > 0) {
+		int delta = (lb->cur - oldcur + lb->size) % lb->size;
+		int neww = MIN(oldoff + delta, lb->size - term.row);
+		if (neww > 0) {
+			lb->off = neww;
+			tfulldirt();
+		}
+	}
+
 	return n;
 }
 
